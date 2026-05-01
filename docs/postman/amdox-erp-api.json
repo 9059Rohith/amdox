@@ -1,0 +1,98 @@
+{
+  "info": {
+    "name": "Amdox ERP API",
+    "description": "Complete Postman collection for Amdox ERP v1 API",
+    "version": "1.0.0",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{access_token}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:3000", "type": "string" },
+    { "key": "access_token", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "event": [{ "listen": "test", "script": { "exec": ["if (pm.response.code === 200) { pm.collectionVariables.set('access_token', pm.response.json().accessToken); }"], "type": "text/javascript" } }],
+          "request": { "method": "POST", "url": "{{base_url}}/api/v1/auth/login", "body": { "mode": "raw", "raw": "{\"email\":\"admin@demo.amdox.dev\",\"password\":\"Admin@1234!\"}", "options": { "raw": { "language": "json" } } } }
+        },
+        { "name": "Refresh Token", "request": { "method": "POST", "url": "{{base_url}}/api/v1/auth/refresh", "body": { "mode": "raw", "raw": "{\"refreshToken\":\"{{refresh_token}}\"}", "options": { "raw": { "language": "json" } } } } }
+      ]
+    },
+    {
+      "name": "Health",
+      "item": [
+        { "name": "Liveness", "request": { "method": "GET", "url": "{{base_url}}/health/live" } },
+        { "name": "Readiness", "request": { "method": "GET", "url": "{{base_url}}/health/ready" } },
+        { "name": "DB Health", "request": { "method": "GET", "url": "{{base_url}}/health/db" } }
+      ]
+    },
+    {
+      "name": "Finance - GL",
+      "item": [
+        { "name": "List Journal Entries", "request": { "method": "GET", "url": "{{base_url}}/api/v1/finance/gl/journal-entries?page=1&limit=20" } },
+        { "name": "Create Journal Entry", "request": { "method": "POST", "url": "{{base_url}}/api/v1/finance/gl/journal-entries", "body": { "mode": "raw", "raw": "{\"description\":\"Test Entry\",\"entryDate\":\"2026-04-01T00:00:00Z\",\"lines\":[{\"accountId\":\"{{account_id}}\",\"type\":\"DEBIT\",\"amount\":5000,\"currency\":\"USD\"},{\"accountId\":\"{{revenue_account_id}}\",\"type\":\"CREDIT\",\"amount\":5000,\"currency\":\"USD\"}]}", "options": { "raw": { "language": "json" } } } } },
+        { "name": "List Accounts", "request": { "method": "GET", "url": "{{base_url}}/api/v1/finance/gl/accounts" } },
+        { "name": "Trial Balance", "request": { "method": "GET", "url": "{{base_url}}/api/v1/finance/gl/trial-balance?period=2026-03" } }
+      ]
+    },
+    {
+      "name": "Finance - AP",
+      "item": [
+        { "name": "List AP Invoices", "request": { "method": "GET", "url": "{{base_url}}/api/v1/finance/ap/invoices" } },
+        { "name": "Create AP Invoice", "request": { "method": "POST", "url": "{{base_url}}/api/v1/finance/ap/invoices", "body": { "mode": "raw", "raw": "{\"vendorId\":\"{{vendor_id}}\",\"invoiceNumber\":\"INV-2026-001\",\"invoiceDate\":\"2026-04-01\",\"dueDate\":\"2026-05-01\",\"lineItems\":[{\"description\":\"Software License\",\"quantity\":1,\"unitPrice\":1000,\"currency\":\"USD\"}]}", "options": { "raw": { "language": "json" } } } } }
+      ]
+    },
+    {
+      "name": "Finance - AR",
+      "item": [
+        { "name": "List AR Invoices", "request": { "method": "GET", "url": "{{base_url}}/api/v1/finance/ar/invoices" } },
+        { "name": "Aging Report", "request": { "method": "GET", "url": "{{base_url}}/api/v1/finance/ar/aging-report" } }
+      ]
+    },
+    {
+      "name": "HR",
+      "item": [
+        { "name": "List Employees", "request": { "method": "GET", "url": "{{base_url}}/api/v1/hr/employees?page=1&limit=20" } },
+        { "name": "Create Employee", "request": { "method": "POST", "url": "{{base_url}}/api/v1/hr/employees", "body": { "mode": "raw", "raw": "{\"firstName\":\"Jane\",\"lastName\":\"Smith\",\"email\":\"jane.smith@demo.com\",\"departmentId\":\"{{dept_id}}\",\"position\":\"Engineer\",\"salary\":80000,\"currency\":\"USD\"}", "options": { "raw": { "language": "json" } } } } },
+        { "name": "Org Chart", "request": { "method": "GET", "url": "{{base_url}}/api/v1/hr/employees/org-chart" } },
+        { "name": "Run Payroll", "request": { "method": "POST", "url": "{{base_url}}/api/v1/hr/payroll/run", "body": { "mode": "raw", "raw": "{\"period\":\"2026-04\",\"employeeIds\":[]}", "options": { "raw": { "language": "json" } } } } }
+      ]
+    },
+    {
+      "name": "Supply Chain",
+      "item": [
+        { "name": "List Vendors", "request": { "method": "GET", "url": "{{base_url}}/api/v1/supply-chain/vendors" } },
+        { "name": "List Purchase Orders", "request": { "method": "GET", "url": "{{base_url}}/api/v1/supply-chain/purchase-orders" } },
+        { "name": "Create PO", "request": { "method": "POST", "url": "{{base_url}}/api/v1/supply-chain/purchase-orders", "body": { "mode": "raw", "raw": "{\"vendorId\":\"{{vendor_id}}\",\"expectedDeliveryDate\":\"2026-05-01\",\"lineItems\":[{\"inventoryItemId\":\"{{item_id}}\",\"quantity\":100,\"unitPrice\":25.00,\"currency\":\"USD\"}]}", "options": { "raw": { "language": "json" } } } } },
+        { "name": "Inventory Levels", "request": { "method": "GET", "url": "{{base_url}}/api/v1/supply-chain/inventory" } }
+      ]
+    },
+    {
+      "name": "BI Dashboard",
+      "item": [
+        { "name": "KPI Metrics", "request": { "method": "GET", "url": "{{base_url}}/api/v1/bi/dashboard/metrics" } },
+        { "name": "Revenue Chart", "request": { "method": "GET", "url": "{{base_url}}/api/v1/bi/dashboard/charts/revenue?period=12months" } },
+        { "name": "Drill Down", "request": { "method": "GET", "url": "{{base_url}}/api/v1/bi/dashboard/drill-down?chart=revenue&segment=Q1" } }
+      ]
+    },
+    {
+      "name": "Notifications",
+      "item": [
+        { "name": "List Notifications", "request": { "method": "GET", "url": "{{base_url}}/api/v1/notifications" } }
+      ]
+    },
+    {
+      "name": "Audit Logs",
+      "item": [
+        { "name": "Query Audit Logs", "request": { "method": "GET", "url": "{{base_url}}/api/v1/audit?entity=JournalEntry&page=1&limit=50" } }
+      ]
+    }
+  ]
+}

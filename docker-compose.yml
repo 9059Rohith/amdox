@@ -1,0 +1,245 @@
+version: '3.9'
+
+services:
+  # PostgreSQL 17 - Main Database
+  postgres:
+    image: postgres:17-alpine
+    container_name: amdox-postgres
+    environment:
+      POSTGRES_USER: amdox
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: amdox_erp
+      POSTGRES_MULTIPLE_DATABASES: amdox_erp,amdox_timescale
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/docker/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U amdox']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - amdox-network
+
+  # TimescaleDB - For audit logs and time-series data
+  timescaledb:
+    image: timescale/timescaledb:latest-pg17
+    container_name: amdox-timescaledb
+    environment:
+      POSTGRES_USER: amdox
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: amdox_timescale
+    ports:
+      - '5433:5432'
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U amdox']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - amdox-network
+
+  # Redis 8 - Cache, Sessions, Job Queues
+  redis:
+    image: redis:8-alpine
+    container_name: amdox-redis
+    command: redis-server --requirepass redispassword
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', '--raw', 'incr', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - amdox-network
+
+  # Keycloak 25 - Authentication & Authorization
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    container_name: amdox-keycloak
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: amdox
+      KC_DB_PASSWORD: password
+      KC_HOSTNAME: localhost
+      KC_HTTP_ENABLED: true
+      KC_HEALTH_ENABLED: true
+    command: start-dev
+    ports:
+      - '8080:8080'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'exec 3<>/dev/tcp/127.0.0.1/8080; echo -e "GET /health/ready HTTP/1.1\r\nhost: 127.0.0.1:8080\r\nConnection: close\r\n\r\n" >&3; if [ $? -eq 0 ]; then echo "OK"; exit 0; else echo "Fail"; exit 1; fi;']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    networks:
+      - amdox-network
+
+  # Elasticsearch 8.15 - Full-text Search
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    container_name: amdox-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - 'ES_JAVA_OPTS=-Xms512m -Xmx512m'
+    ports:
+      - '9200:9200'
+      - '9300:9300'
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -f http://localhost:9200/_cluster/health || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - amdox-network
+
+  # Kibana - Elasticsearch UI
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.15.3
+    container_name: amdox-kibana
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    ports:
+      - '5601:5601'
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -f http://localhost:5601/api/status || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - amdox-network
+
+  # MailHog - Email Testing
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: amdox-mailhog
+    ports:
+      - '1025:1025' # SMTP
+      - '8025:8025' # Web UI
+    networks:
+      - amdox-network
+
+  # Prometheus - Metrics Collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: amdox-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - '9090:9090'
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - amdox-network
+
+  # Grafana - Metrics Visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: amdox-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: false
+    ports:
+      - '3002:3000'
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    networks:
+      - amdox-network
+
+  # Loki - Log Aggregation
+  loki:
+    image: grafana/loki:latest
+    container_name: amdox-loki
+    ports:
+      - '3100:3100'
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki_data:/loki
+      - ./infra/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+    networks:
+      - amdox-network
+
+  # Jaeger - Distributed Tracing
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: amdox-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: true
+    ports:
+      - '5775:5775/udp' # accept zipkin.thrift over compact thrift protocol
+      - '6831:6831/udp' # accept jaeger.thrift over compact thrift protocol
+      - '6832:6832/udp' # accept jaeger.thrift over binary thrift protocol
+      - '5778:5778' # serve configs
+      - '16686:16686' # serve frontend
+      - '14268:14268' # accept jaeger.thrift directly from clients
+      - '14250:14250' # accept model.proto
+      - '9411:9411' # Zipkin compatible endpoint
+      - '4317:4317' # OTLP gRPC receiver
+      - '4318:4318' # OTLP HTTP receiver
+    networks:
+      - amdox-network
+
+  # MLflow - ML Model Registry & Tracking
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    container_name: amdox-mlflow
+    command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:///mlflow.db --default-artifact-root /mlflow/artifacts
+    ports:
+      - '5000:5000'
+    volumes:
+      - mlflow_data:/mlflow
+    networks:
+      - amdox-network
+
+volumes:
+  postgres_data:
+    driver: local
+  timescale_data:
+    driver: local
+  redis_data:
+    driver: local
+  elasticsearch_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  loki_data:
+    driver: local
+  mlflow_data:
+    driver: local
+
+networks:
+  amdox-network:
+    driver: bridge

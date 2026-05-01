@@ -1,0 +1,77 @@
+global:
+  imageRegistry: ghcr.io
+  imagePrefix: amdoxtech/amdox-erp
+
+api:
+  replicaCount: 3
+  image:
+    repository: ghcr.io/amdoxtech/amdox-erp-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 3000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+  env:
+    NODE_ENV: production
+    PORT: "3000"
+  ingress:
+    enabled: true
+    className: nginx
+    host: api.amdox.dev
+    tlsSecretName: amdox-erp-tls
+
+mlService:
+  replicaCount: 2
+  image:
+    repository: ghcr.io/amdoxtech/amdox-erp-ml
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+
+certManager:
+  enabled: true
+  issuerEmail: ops@amdox.dev
+
+istio:
+  enabled: true
+  canary:
+    enabled: false
+    weight: 10  # 10% traffic to canary
+
+secrets:
+  useSealed: true
