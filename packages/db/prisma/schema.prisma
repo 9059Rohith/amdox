@@ -1,0 +1,1043 @@
+// Amdox ERP - Prisma Schema
+// Multi-tenant ERP with row-level security
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// TENANT & USER MANAGEMENT
+// ============================================================================
+
+model Tenant {
+  id                String   @id @default(cuid())
+  name              String
+  slug              String   @unique
+  domain            String?  @unique
+  logo              String?
+  settings          Json     @default("{}")
+  isActive          Boolean  @default(true)
+  subscriptionTier  String   @default("STANDARD") // FREE, STANDARD, PREMIUM, ENTERPRISE
+  maxUsers          Int      @default(50)
+  mfaEnforced       Boolean  @default(false)
+  sessionTimeout    Int      @default(28800) // seconds (8 hours)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  deletedAt         DateTime?
+
+  users             TenantUser[]
+  accounts          Account[]
+  journalEntries    JournalEntry[]
+  transactions      Transaction[]
+  invoices          Invoice[]
+  paymentRuns       PaymentRun[]
+  employees         Employee[]
+  departments       Department[]
+  leaveRequests     LeaveRequest[]
+  attendances       Attendance[]
+  payrollRuns       PayrollRun[]
+  vendors           Vendor[]
+  purchaseOrders    PurchaseOrder[]
+  goodsReceipts     GoodsReceipt[]
+  inventoryItems    InventoryItem[]
+  warehouses        Warehouse[]
+  reorderRules      ReorderRule[]
+  projects          Project[]
+  dashboardWidgets  DashboardWidget[]
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  forecastModels    ForecastModel[]
+  outboxEvents      OutboxEvent[]
+
+  @@map("tenants")
+  @@index([slug])
+  @@index([isActive])
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  TENANT_ADMIN
+  MANAGER
+  VIEWER
+}
+
+model User {
+  id                String   @id @default(cuid())
+  email             String   @unique
+  name              String
+  avatar            String?
+  keycloakId        String?  @unique
+  isActive          Boolean  @default(true)
+  lastLoginAt       DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  deletedAt         DateTime?
+
+  tenants           TenantUser[]
+  notificationPrefs NotificationPreference[]
+  auditLogs         AuditLog[]
+
+  @@map("users")
+  @@index([email])
+  @@index([keycloakId])
+}
+
+model TenantUser {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  role      UserRole @default(VIEWER)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@map("tenant_users")
+  @@index([tenantId])
+  @@index([userId])
+}
+
+// ============================================================================
+// FINANCIAL MANAGEMENT (GENERAL LEDGER, AP, AR)
+// ============================================================================
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+model Account {
+  id                String      @id @default(cuid())
+  tenantId          String
+  code              String
+  name              String
+  type              AccountType
+  currency          String      @default("USD")
+  parentId          String?
+  isActive          Boolean     @default(true)
+  balance           Decimal     @default(0) @db.Decimal(20, 4)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  deletedAt         DateTime?
+
+  tenant            Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parent            Account?    @relation("AccountHierarchy", fields: [parentId], references: [id])
+  children          Account[]   @relation("AccountHierarchy")
+  transactions      Transaction[]
+
+  @@unique([tenantId, code])
+  @@map("accounts")
+  @@index([tenantId])
+  @@index([type])
+  @@index([parentId])
+}
+
+enum JournalEntryStatus {
+  DRAFT
+  POSTED
+  REVERSED
+}
+
+model JournalEntry {
+  id                String              @id @default(cuid())
+  tenantId          String
+  entryNumber       String
+  description       String
+  entryDate         DateTime
+  postingDate       DateTime?
+  status            JournalEntryStatus  @default(DRAFT)
+  periodId          String?
+  isBalanced        Boolean             @default(false)
+  totalDebit        Decimal             @default(0) @db.Decimal(20, 4)
+  totalCredit       Decimal             @default(0) @db.Decimal(20, 4)
+  createdBy         String
+  approvedBy        String?
+  approvedAt        DateTime?
+  reversedBy        String?
+  reversedAt        DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  deletedAt         DateTime?
+
+  tenant            Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  transactions      Transaction[]
+
+  @@unique([tenantId, entryNumber])
+  @@map("journal_entries")
+  @@index([tenantId])
+  @@index([status])
+  @@index([entryDate])
+}
+
+enum TransactionType {
+  DEBIT
+  CREDIT
+}
+
+model Transaction {
+  id                String          @id @default(cuid())
+  tenantId          String
+  journalEntryId    String
+  accountId         String
+  type              TransactionType
+  amount            Decimal         @db.Decimal(20, 4)
+  currency          String          @default("USD")
+  exchangeRate      Decimal         @default(1) @db.Decimal(10, 6)
+  baseCurrencyAmount Decimal        @db.Decimal(20, 4)
+  description       String?
+  reference         String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  journalEntry      JournalEntry    @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  account           Account         @relation(fields: [accountId], references: [id])
+
+  @@map("transactions")
+  @@index([tenantId])
+  @@index([journalEntryId])
+  @@index([accountId])
+}
+
+enum InvoiceType {
+  PAYABLE
+  RECEIVABLE
+}
+
+enum InvoiceStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  PAID
+  PARTIALLY_PAID
+  OVERDUE
+  CANCELLED
+}
+
+model Invoice {
+  id                String        @id @default(cuid())
+  tenantId          String
+  invoiceNumber     String
+  type              InvoiceType
+  vendorId          String?
+  customerId        String?
+  purchaseOrderId   String?
+  invoiceDate       DateTime
+  dueDate           DateTime
+  status            InvoiceStatus @default(DRAFT)
+  subtotal          Decimal       @db.Decimal(20, 4)
+  taxAmount         Decimal       @default(0) @db.Decimal(20, 4)
+  totalAmount       Decimal       @db.Decimal(20, 4)
+  paidAmount        Decimal       @default(0) @db.Decimal(20, 4)
+  currency          String        @default("USD")
+  exchangeRate      Decimal       @default(1) @db.Decimal(10, 6)
+  paymentTerms      String?
+  notes             String?
+  ocrData           Json?
+  ocrConfidence     Decimal?      @db.Decimal(5, 4)
+  matchedAt         DateTime?
+  matchedBy         String?
+  approvedBy        String?
+  approvedAt        DateTime?
+  paidAt            DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  deletedAt         DateTime?
+
+  tenant            Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vendor            Vendor?       @relation(fields: [vendorId], references: [id])
+  purchaseOrder     PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  paymentRuns       PaymentRun[]  @relation("InvoicePayments")
+
+  @@unique([tenantId, invoiceNumber])
+  @@map("invoices")
+  @@index([tenantId])
+  @@index([type])
+  @@index([status])
+  @@index([vendorId])
+  @@index([dueDate])
+}
+
+enum PaymentRunStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model PaymentRun {
+  id                String            @id @default(cuid())
+  tenantId          String
+  runNumber         String
+  status            PaymentRunStatus  @default(DRAFT)
+  paymentDate       DateTime
+  totalAmount       Decimal           @db.Decimal(20, 4)
+  invoiceCount      Int               @default(0)
+  processedCount    Int               @default(0)
+  failedCount       Int               @default(0)
+  createdBy         String
+  approvedBy        String?
+  approvedAt        DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  deletedAt         DateTime?
+
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoices          Invoice[]         @relation("InvoicePayments")
+
+  @@unique([tenantId, runNumber])
+  @@map("payment_runs")
+  @@index([tenantId])
+  @@index([status])
+}
+
+// ============================================================================
+// HR & PAYROLL
+// ============================================================================
+
+model Department {
+  id                String     @id @default(cuid())
+  tenantId          String
+  name              String
+  code              String
+  managerId         String?
+  parentId          String?
+  isActive          Boolean    @default(true)
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+  deletedAt         DateTime?
+
+  tenant            Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parent            Department? @relation("DepartmentHierarchy", fields: [parentId], references: [id])
+  children          Department[] @relation("DepartmentHierarchy")
+  employees         Employee[]
+
+  @@unique([tenantId, code])
+  @@map("departments")
+  @@index([tenantId])
+  @@index([parentId])
+}
+
+enum EmploymentStatus {
+  ACTIVE
+  ON_LEAVE
+  SUSPENDED
+  TERMINATED
+}
+
+model Employee {
+  id                String            @id @default(cuid())
+  tenantId          String
+  employeeNumber    String
+  firstName         String
+  lastName          String
+  email             String
+  phone             String?
+  dateOfBirth       DateTime?
+  hireDate          DateTime
+  terminationDate   DateTime?
+  departmentId      String
+  managerId         String?
+  jobTitle          String
+  status            EmploymentStatus  @default(ACTIVE)
+  salary            Decimal           @db.Decimal(20, 4)
+  currency          String            @default("USD")
+  bankAccount       String?
+  taxId             String?
+  address           Json?
+  emergencyContact  Json?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  deletedAt         DateTime?
+
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  department        Department        @relation(fields: [departmentId], references: [id])
+  manager           Employee?         @relation("EmployeeManager", fields: [managerId], references: [id])
+  directReports     Employee[]        @relation("EmployeeManager")
+  leaveRequests     LeaveRequest[]
+  attendances       Attendance[]
+  payslips          Payslip[]
+  resourceAllocations ResourceAllocation[]
+
+  @@unique([tenantId, employeeNumber])
+  @@unique([tenantId, email])
+  @@map("employees")
+  @@index([tenantId])
+  @@index([departmentId])
+  @@index([managerId])
+  @@index([status])
+}
+
+enum LeaveType {
+  ANNUAL
+  SICK
+  CASUAL
+  MATERNITY
+  PATERNITY
+  UNPAID
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model LeaveRequest {
+  id                String      @id @default(cuid())
+  tenantId          String
+  employeeId        String
+  leaveType         LeaveType
+  startDate         DateTime
+  endDate           DateTime
+  days              Decimal     @db.Decimal(5, 2)
+  reason            String
+  status            LeaveStatus @default(PENDING)
+  approvedBy        String?
+  approvedAt        DateTime?
+  rejectedBy        String?
+  rejectedAt        DateTime?
+  rejectionReason   String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  deletedAt         DateTime?
+
+  tenant            Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  employee          Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@map("leave_requests")
+  @@index([tenantId])
+  @@index([employeeId])
+  @@index([status])
+  @@index([startDate])
+}
+
+model Attendance {
+  id                String    @id @default(cuid())
+  tenantId          String
+  employeeId        String
+  date              DateTime  @db.Date
+  clockIn           DateTime?
+  clockOut          DateTime?
+  regularHours      Decimal   @default(0) @db.Decimal(5, 2)
+  overtimeHours     Decimal   @default(0) @db.Decimal(5, 2)
+  isAbsent          Boolean   @default(false)
+  notes             String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  employee          Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, employeeId, date])
+  @@map("attendances")
+  @@index([tenantId])
+  @@index([employeeId])
+  @@index([date])
+}
+
+enum PayrollRunStatus {
+  DRAFT
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model PayrollRun {
+  id                String            @id @default(cuid())
+  tenantId          String
+  runNumber         String
+  periodStart       DateTime
+  periodEnd         DateTime
+  paymentDate       DateTime
+  status            PayrollRunStatus  @default(DRAFT)
+  employeeCount     Int               @default(0)
+  totalGross        Decimal           @default(0) @db.Decimal(20, 4)
+  totalDeductions   Decimal           @default(0) @db.Decimal(20, 4)
+  totalNet          Decimal           @default(0) @db.Decimal(20, 4)
+  processedBy       String?
+  processedAt       DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  deletedAt         DateTime?
+
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payslips          Payslip[]
+
+  @@unique([tenantId, runNumber])
+  @@map("payroll_runs")
+  @@index([tenantId])
+  @@index([status])
+}
+
+model Payslip {
+  id                String      @id @default(cuid())
+  tenantId          String
+  payrollRunId      String
+  employeeId        String
+  payslipNumber     String
+  periodStart       DateTime
+  periodEnd         DateTime
+  paymentDate       DateTime
+  basicSalary       Decimal     @db.Decimal(20, 4)
+  allowances        Json        @default("[]")
+  grossPay          Decimal     @db.Decimal(20, 4)
+  taxDeductions     Json        @default("[]")
+  statutoryDeductions Json      @default("[]")
+  otherDeductions   Json        @default("[]")
+  totalDeductions   Decimal     @db.Decimal(20, 4)
+  netPay            Decimal     @db.Decimal(20, 4)
+  pdfUrl            String?
+  qrCode            String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  employee          Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  payrollRun        PayrollRun  @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+
+  @@unique([payrollRunId, employeeId])
+  @@map("payslips")
+  @@index([tenantId])
+  @@index([employeeId])
+  @@index([payrollRunId])
+}
+
+// ============================================================================
+// SUPPLY CHAIN & INVENTORY
+// ============================================================================
+
+model Vendor {
+  id                String          @id @default(cuid())
+  tenantId          String
+  vendorNumber      String
+  name              String
+  email             String
+  phone             String?
+  website           String?
+  taxId             String?
+  paymentTerms      String?
+  creditLimit       Decimal?        @db.Decimal(20, 4)
+  address           Json?
+  contactPerson     String?
+  isActive          Boolean         @default(true)
+  portalAccessEnabled Boolean       @default(false)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  deletedAt         DateTime?
+
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseOrders    PurchaseOrder[]
+  invoices          Invoice[]
+
+  @@unique([tenantId, vendorNumber])
+  @@map("vendors")
+  @@index([tenantId])
+  @@index([isActive])
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  SENT
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CLOSED
+  CANCELLED
+}
+
+model PurchaseOrder {
+  id                String              @id @default(cuid())
+  tenantId          String
+  poNumber          String
+  vendorId          String
+  orderDate         DateTime
+  expectedDate      DateTime?
+  status            PurchaseOrderStatus @default(DRAFT)
+  subtotal          Decimal             @db.Decimal(20, 4)
+  taxAmount         Decimal             @default(0) @db.Decimal(20, 4)
+  totalAmount       Decimal             @db.Decimal(20, 4)
+  currency          String              @default("USD")
+  notes             String?
+  createdBy         String
+  approvedBy        String?
+  approvedAt        DateTime?
+  sentAt            DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  deletedAt         DateTime?
+
+  tenant            Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vendor            Vendor              @relation(fields: [vendorId], references: [id])
+  goodsReceipts     GoodsReceipt[]
+  invoices          Invoice[]
+
+  @@unique([tenantId, poNumber])
+  @@map("purchase_orders")
+  @@index([tenantId])
+  @@index([vendorId])
+  @@index([status])
+}
+
+enum GoodsReceiptStatus {
+  DRAFT
+  CONFIRMED
+  CANCELLED
+}
+
+model GoodsReceipt {
+  id                String              @id @default(cuid())
+  tenantId          String
+  grNumber          String
+  purchaseOrderId   String
+  receiptDate       DateTime
+  status            GoodsReceiptStatus  @default(DRAFT)
+  items             Json
+  notes             String?
+  receivedBy        String
+  confirmedBy       String?
+  confirmedAt       DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  deletedAt         DateTime?
+
+  tenant            Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseOrder     PurchaseOrder       @relation(fields: [purchaseOrderId], references: [id])
+
+  @@unique([tenantId, grNumber])
+  @@map("goods_receipts")
+  @@index([tenantId])
+  @@index([purchaseOrderId])
+}
+
+model InventoryItem {
+  id                String          @id @default(cuid())
+  tenantId          String
+  sku               String
+  name              String
+  description       String?
+  category          String?
+  unit              String          @default("PCS")
+  costPrice         Decimal         @db.Decimal(20, 4)
+  sellingPrice      Decimal?        @db.Decimal(20, 4)
+  reorderPoint      Int             @default(10)
+  reorderQuantity   Int             @default(50)
+  currentStock      Int             @default(0)
+  reservedStock     Int             @default(0)
+  availableStock    Int             @default(0)
+  warehouseId       String?
+  isActive          Boolean         @default(true)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  deletedAt         DateTime?
+
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse         Warehouse?      @relation(fields: [warehouseId], references: [id])
+  reorderRules      ReorderRule[]
+  forecastModels    ForecastModel[]
+
+  @@unique([tenantId, sku])
+  @@map("inventory_items")
+  @@index([tenantId])
+  @@index([warehouseId])
+  @@index([category])
+}
+
+model Warehouse {
+  id                String          @id @default(cuid())
+  tenantId          String
+  code              String
+  name              String
+  address           Json?
+  managerId         String?
+  isActive          Boolean         @default(true)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  deletedAt         DateTime?
+
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  inventoryItems    InventoryItem[]
+
+  @@unique([tenantId, code])
+  @@map("warehouses")
+  @@index([tenantId])
+}
+
+model ReorderRule {
+  id                String          @id @default(cuid())
+  tenantId          String
+  inventoryItemId   String
+  minQuantity       Int
+  maxQuantity       Int
+  reorderQuantity   Int
+  isActive          Boolean         @default(true)
+  lastTriggered     DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  inventoryItem     InventoryItem   @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+
+  @@map("reorder_rules")
+  @@index([tenantId])
+  @@index([inventoryItemId])
+}
+
+// ============================================================================
+// PROJECT MANAGEMENT
+// ============================================================================
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+model Project {
+  id                String          @id @default(cuid())
+  tenantId          String
+  projectNumber     String
+  name              String
+  description       String?
+  status            ProjectStatus   @default(PLANNING)
+  startDate         DateTime
+  endDate           DateTime?
+  budget            Decimal         @db.Decimal(20, 4)
+  actualCost        Decimal         @default(0) @db.Decimal(20, 4)
+  currency          String          @default("USD")
+  managerId         String?
+  clientName        String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  deletedAt         DateTime?
+
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  milestones        Milestone[]
+  tasks             Task[]
+  budgets           Budget[]
+
+  @@unique([tenantId, projectNumber])
+  @@map("projects")
+  @@index([tenantId])
+  @@index([status])
+}
+
+model Milestone {
+  id                String          @id @default(cuid())
+  projectId         String
+  name              String
+  description       String?
+  dueDate           DateTime
+  isCompleted       Boolean         @default(false)
+  completedAt       DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  project           Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks             Task[]
+
+  @@map("milestones")
+  @@index([projectId])
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  REVIEW
+  COMPLETED
+}
+
+model Task {
+  id                String              @id @default(cuid())
+  projectId         String
+  milestoneId       String?
+  title             String
+  description       String?
+  status            TaskStatus          @default(TODO)
+  priority          Int                 @default(0)
+  startDate         DateTime?
+  endDate           DateTime?
+  estimatedHours    Decimal?            @db.Decimal(10, 2)
+  actualHours       Decimal             @default(0) @db.Decimal(10, 2)
+  completedAt       DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  milestone         Milestone?          @relation(fields: [milestoneId], references: [id])
+  dependencies      TaskDependency[]    @relation("TaskDependencies")
+  dependentOn       TaskDependency[]    @relation("DependentTasks")
+  resourceAllocations ResourceAllocation[]
+
+  @@map("tasks")
+  @@index([projectId])
+  @@index([milestoneId])
+  @@index([status])
+}
+
+model TaskDependency {
+  id                String          @id @default(cuid())
+  taskId            String
+  dependsOnTaskId   String
+  createdAt         DateTime        @default(now())
+
+  task              Task            @relation("TaskDependencies", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOnTask     Task            @relation("DependentTasks", fields: [dependsOnTaskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, dependsOnTaskId])
+  @@map("task_dependencies")
+  @@index([taskId])
+  @@index([dependsOnTaskId])
+}
+
+model ResourceAllocation {
+  id                String          @id @default(cuid())
+  taskId            String
+  employeeId        String
+  allocatedHours    Decimal         @db.Decimal(10, 2)
+  startDate         DateTime
+  endDate           DateTime
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  task              Task            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  employee          Employee        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@map("resource_allocations")
+  @@index([taskId])
+  @@index([employeeId])
+}
+
+model Budget {
+  id                String          @id @default(cuid())
+  projectId         String
+  category          String
+  plannedAmount     Decimal         @db.Decimal(20, 4)
+  actualAmount      Decimal         @default(0) @db.Decimal(20, 4)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  project           Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("budgets")
+  @@index([projectId])
+}
+
+// ============================================================================
+// BUSINESS INTELLIGENCE
+// ============================================================================
+
+model DashboardWidget {
+  id                String          @id @default(cuid())
+  tenantId          String
+  dashboardId       String
+  type              String
+  title             String
+  config            Json
+  position          Json
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("dashboard_widgets")
+  @@index([tenantId])
+  @@index([dashboardId])
+}
+
+model ScheduledReport {
+  id                String          @id @default(cuid())
+  name              String
+  description       String?
+  reportType        String
+  schedule          String
+  recipients        String[]
+  format            String          @default("PDF")
+  isActive          Boolean         @default(true)
+  lastRunAt         DateTime?
+  nextRunAt         DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@map("scheduled_reports")
+}
+
+// ============================================================================
+// NOTIFICATIONS
+// ============================================================================
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  WEBHOOK
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model Notification {
+  id                String              @id @default(cuid())
+  tenantId          String
+  userId            String?
+  channel           NotificationChannel
+  eventType         String
+  title             String
+  message           String
+  data              Json?
+  status            NotificationStatus  @default(PENDING)
+  sentAt            DateTime?
+  failedAt          DateTime?
+  errorMessage      String?
+  retryCount        Int                 @default(0)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  tenant            Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+  @@index([tenantId])
+  @@index([userId])
+  @@index([status])
+  @@index([eventType])
+}
+
+model NotificationPreference {
+  id                String              @id @default(cuid())
+  userId            String
+  eventType         String
+  channels          NotificationChannel[]
+  isEnabled         Boolean             @default(true)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, eventType])
+  @@map("notification_preferences")
+  @@index([userId])
+}
+
+// ============================================================================
+// AUDIT & COMPLIANCE
+// ============================================================================
+
+model AuditLog {
+  id                String          @id @default(cuid())
+  tenantId          String
+  userId            String?
+  action            String
+  entity            String
+  entityId          String?
+  previousHash      String?
+  currentHash       String
+  payload           Json
+  ipAddress         String?
+  userAgent         String?
+  timestamp         DateTime        @default(now())
+
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user              User?           @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+  @@index([tenantId])
+  @@index([userId])
+  @@index([entity])
+  @@index([timestamp])
+}
+
+// ============================================================================
+// AI FORECASTING
+// ============================================================================
+
+model ForecastModel {
+  id                String              @id @default(cuid())
+  tenantId          String
+  inventoryItemId   String
+  modelType         String              // PROPHET or LSTM
+  version           String
+  trainedAt         DateTime
+  accuracy          Json                // {mape, rmse, mae}
+  hyperparameters   Json?
+  isActive          Boolean             @default(true)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  tenant            Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  inventoryItem     InventoryItem       @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  predictions       ForecastPrediction[]
+
+  @@map("forecast_models")
+  @@index([tenantId])
+  @@index([inventoryItemId])
+  @@index([isActive])
+}
+
+model ForecastPrediction {
+  id                String          @id @default(cuid())
+  forecastModelId   String
+  predictionDate    DateTime        @db.Date
+  quantity          Decimal         @db.Decimal(10, 2)
+  lowerBound        Decimal         @db.Decimal(10, 2)
+  upperBound        Decimal         @db.Decimal(10, 2)
+  confidence        Decimal         @db.Decimal(5, 4)
+  createdAt         DateTime        @default(now())
+
+  forecastModel     ForecastModel   @relation(fields: [forecastModelId], references: [id], onDelete: Cascade)
+
+  @@unique([forecastModelId, predictionDate])
+  @@map("forecast_predictions")
+  @@index([forecastModelId])
+  @@index([predictionDate])
+}
+
+// ============================================================================
+// OUTBOX PATTERN (for reliable event publishing)
+// ============================================================================
+
+enum OutboxEventStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
+model OutboxEvent {
+  id                String            @id @default(cuid())
+  tenantId          String
+  eventType         String
+  aggregateId       String
+  payload           Json
+  status            OutboxEventStatus @default(PENDING)
+  retryCount        Int               @default(0)
+  lastError         String?
+  publishedAt       DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("outbox_events")
+  @@index([tenantId])
+  @@index([status])
+  @@index([createdAt])
+}

@@ -1,0 +1,52 @@
+{{- if .Values.istio.enabled }}
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: {{ .Release.Name }}-api-vs
+spec:
+  hosts:
+    - {{ .Values.api.ingress.host }}
+  http:
+    {{- if .Values.istio.canary.enabled }}
+    - route:
+        - destination:
+            host: {{ .Release.Name }}-api
+            subset: stable
+          weight: {{ sub 100 .Values.istio.canary.weight }}
+        - destination:
+            host: {{ .Release.Name }}-api
+            subset: canary
+          weight: {{ .Values.istio.canary.weight }}
+    {{- else }}
+    - route:
+        - destination:
+            host: {{ .Release.Name }}-api
+            subset: stable
+          weight: 100
+    {{- end }}
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: {{ .Release.Name }}-api-dr
+spec:
+  host: {{ .Release.Name }}-api
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 1000
+      http:
+        http1MaxPendingRequests: 1000
+        http2MaxRequests: 10000
+    outlierDetection:
+      consecutiveGatewayErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+  subsets:
+    - name: stable
+      labels:
+        version: stable
+    - name: canary
+      labels:
+        version: canary
+{{- end }}

@@ -1,0 +1,9 @@
+apiVersion: v2
+name: amdox-erp
+description: Amdox Enterprise ERP — Helm Chart
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+maintainers:
+  - name: Amdox Engineering
+    email: eng@amdox.dev
